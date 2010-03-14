@@ -1083,10 +1083,24 @@ $MainWindow=Layout::Window->new($CmdLine{layout}||$Options{Layout});
 warn("FUTZ\n");
 
 my $playing_test_thingy=sub {
-    warn("BEGAN PLAYING PUNK\n");
+
+    warn("PLAYING\n");
+};
+
+my $played_test_thingy=sub {
+    warn("PLAYED\n");
+};
+
+my $currentsong;
+my $SongID_test_thingy=sub {
+    return if defined $currentsong && $currentsong==$::SongID;
+    $currentsong=$::SongID;
+    warn("SONGID CHANGED: " . $SongID . " - " . $#_ . "\n");
 };
 
 Watch($MainWindow, Playing=> $playing_test_thingy);
+Watch($MainWindow, Played=> $played_test_thingy);
+Watch($MainWindow, SongID=> $SongID_test_thingy);
 
 &ShowHide if $CmdLine{hide};
 SkipTo($PlayTime) if $PlayTime; #done only now because of gstreamer
