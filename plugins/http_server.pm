@@ -10,7 +10,7 @@
 # in the Ubuntu (Debian?) packages.
 # As such, it needs to be loaded from CPAN (plus dependencies)
 
-# cpan -i POE POE::Loop::Glib POE::Component::Server::HTTP CGI::Application::Dispatch
+# cpan -i POE POE::Loop::Glib POE::Component::Server::HTTPServer CGI::Application::Dispatch POE::Component::Server::HTTPServer::StaticHandler
 
 =gmbplugin HTTPSERVER
 name    HTTP Server
@@ -34,14 +34,13 @@ sub POE::Kernel::CATCH_EXCEPTIONS () { 0 }
 use POE;
 
 use POE::Kernel { loop => "Glib" };
-use POE::Component::Server::HTTP;
+use POE::Component::Server::HTTPServer;
+use POE::Component::Server::HTTPServer::StaticHandler;
 
 use CGI;
 use HTTP::Status qw/RC_OK/;
 
 use File::Slurp;
-
-
 
 ::SetDefaultOptions(OPT, PortNumber => 8080);
 
@@ -86,7 +85,17 @@ sub state2json {
     } else {
 	$playing = $::TogPlay;
     }
-    return {"current" => song2json($::SongID), "playing" => $playing, "volume" => ::GetVol(), "playposition" => $::PlayTime};
+    # iterate over every SongID in $::Queue, add their entire JSON to a hash.
+
+    my @queue_json;
+    for my $qsid (@{$::Queue}) {
+	my $song = song2json($qsid);
+	push(@queue_json, $song);
+    }
+    
+    use Data::Dump qw(dump);
+    warn dump($::Queue);
+    return {"current" => song2json($::SongID), "playing" => $playing, "volume" => ::GetVol(), "playposition" => $::PlayTime, "queue" => \@queue_json};
 }
 
 sub apply_playing_state {
@@ -154,7 +163,8 @@ sub cgi_from_request {
 }
 
 sub prev_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
     my $query = $request->uri->query;
@@ -168,11 +178,12 @@ sub prev_handler {
     $response->code(200);
     $response->content_type('application/json');
     $response->content(encode_json(state2json()));
-    return RC_OK;
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 sub skip_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
     my $query = $request->uri->query;
@@ -186,11 +197,12 @@ sub skip_handler {
     $response->code(200);
     $response->content_type('application/json');
     $response->content(encode_json(state2json()));
-    return RC_OK;
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 sub player_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $response->protocol( "HTTP/1.1" );
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
@@ -202,19 +214,19 @@ sub player_handler {
 	$response->code(200);
 	$response->content_type('application/json');
 	$response->content(encode_json(state2json()));
-	return RC_OK;
     } elsif($request->method() eq "POST") {
 	# should check $request->header('Accept') for content-type negotiation
 	json2state(decode_json($request->content));
 	$response->code(200);
 	$response->content_type('application/json');
 	$response->content(encode_json(state2json()));
-	return RC_OK;
     }
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 sub code_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
     my $query = $request->uri->query;
@@ -233,11 +245,12 @@ sub code_handler {
 	$response->code(404);
     }
 
-    return RC_OK;
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 sub songs_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
     my $query = $request->uri->query;
@@ -258,11 +271,12 @@ sub songs_handler {
     $response->content(encode_json(song2json($id_and_format[0])));
     $response->code(200);
     $response->header('Content-Type' => "text/javascript");
-    return RC_OK;
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 sub root_handler {
-    my ($request, $response) = @_;
+    my $request = $_[0]->{request};
+    my $response = $_[0]->{response};
     $request->header(Connection => 'close');
     my $path = $request->uri->path;
     my $query = $request->uri->query;
@@ -357,23 +371,27 @@ END
     $response->content($webapp);
 
     # Signal that the request was handled okay.
-    return RC_OK;
+    return POE::Component::Server::HTTPServer::H_FINAL;
 }
 
 my $http_poe_server;
 
 sub StartServer {
-    $http_poe_server = POE::Component::Server::HTTP->new(
-    	Port           => $::Options{OPT.'PortNumber'},
-    	ContentHandler => {"/" => \&root_handler,
-			   "/songs/" => \&songs_handler, # resource: song
-			   "/player" => \&player_handler,
-			   "/skip" => \&skip_handler,
-			   "/prev" => \&prev_handler,
-			   "/code/" => \&code_handler
-    	},
-    	Headers => {Server => 'Gmusicbrowser HTTP',},
-    );
+    my $static_files_handler = POE::Component::Server::HTTPServer::StaticHandler->new($resource_path.::SLASH.'http_server', auto_index => 1);
+    $http_poe_server = POE::Component::Server::HTTPServer->new(
+    	port           => $::Options{OPT.'PortNumber'},
+    	handlers => [
+            "/songs/" => \&songs_handler, # resource: song
+            "/player" => \&player_handler,
+            "/skip" => \&skip_handler,
+            "/prev" => \&prev_handler,
+            "/code/" => \&code_handler,
+            "/static" => $static_files_handler,
+            "/" => \&root_handler
+    	],
+    	headers => {Server => 'Gmusicbrowser HTTP',},
+        );
+    my $running_server = $http_poe_server->create_server();
 }
 
 sub StopServer {
