@@ -10,6 +10,14 @@
 # in the Ubuntu (Debian?) packages.
 # As such, it needs to be loaded from CPAN (plus dependencies)
 
+# for sanity, set these options in CPAN:
+
+# o conf build_requires_install_policy no
+# o conf prerequisites_policy follow
+# o conf commit
+
+# then install them:
+
 # cpan -i POE POE::Loop::Glib POE::Component::Server::HTTPServer CGI::Application::Dispatch POE::Component::Server::HTTPServer::StaticHandler
 
 =gmbplugin HTTPSERVER
